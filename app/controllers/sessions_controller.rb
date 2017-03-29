@@ -1,4 +1,5 @@
 require 'rest_client'
+require 'byebug'
 
 class SessionsController < ApplicationController
 
@@ -34,10 +35,23 @@ class SessionsController < ApplicationController
     # clear it afterwards, if authentication worked.
     flash.now[:error] = t("layouts.notifications.login_failed")
 
-    # Since the authentication happens in the rack layer,
-    # we need to tell Devise to call the action "sessions#new"
-    # in case something goes bad.
-    person = authenticate_person!(:recall => "sessions#new")
+    if ENV['SPARK_AUTH_SERVER']
+      spark_data = spark_auth ENV['SPARK_AUTH_SERVER'], params[:person]
+
+      if spark_data.nil?
+        redirect_to action: :new and return
+      end
+      
+      session["devise.spark_data"] = spark_data
+      redirect_to :action => :create_spark_based, :controller => :people
+    else
+      # Since the authentication happens in the rack layer,
+      # we need to tell Devise to call the action "sessions#new"
+      # in case something goes bad.
+      person = authenticate_person!(:recall => "sessions#new")
+    end
+
+    #byebug
     @current_user = person
 
     flash[:error] = nil
@@ -101,6 +115,28 @@ class SessionsController < ApplicationController
     end
 
     redirect_to login_path
+  end
+
+  def spark_auth auth_server, login_params
+    begin
+      auth_reply = JSON.parse(RestClient.get auth_server, { params: { username: login_params["login"], 
+                                                                      password: login_params["password"]
+                                                                    }})
+      if auth_reply["status"] == "true"
+        spark_data = {  username:     auth_reply["uid"],
+                        given_name:   auth_reply["firstname"],
+                        family_name:  auth_reply["lastname"],
+                        id:           auth_reply["uid"],
+                        email:        auth_reply["username"],
+                        token:        auth_reply["token"]
+        }
+      else
+        nil
+      end
+    rescue Exception => e
+      #byebug
+      nil
+    end
   end
 
   def facebook

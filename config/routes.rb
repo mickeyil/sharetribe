@@ -389,6 +389,7 @@ Kassi::Application.routes.draw do
           get :check_email_availability_and_validity
           get :check_invitation_code
           get :create_facebook_based
+          get :create_spark_based
         end
       end
 

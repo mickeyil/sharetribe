@@ -165,6 +165,41 @@ class PeopleController < Devise::RegistrationsController
     resource
   end
 
+  def create_spark_based
+    byebug
+    username = UserService::API::Users.username_from_spark_data(
+      username: session["devise.spark_data"]["username"],
+      given_name: session["devise.spark_data"]["given_name"],
+      family_name: session["devise.spark_data"]["family_name"],
+      community_id: @current_community.id)
+
+    person_hash = {
+      :username => username,
+      :given_name => session["devise.spark_data"]["given_name"],
+      :family_name => session["devise.spark_data"]["family_name"],
+      :facebook_id => session["devise.spark_data"]["id"],
+      :locale => I18n.locale,
+      :test_group_number => 1 + rand(4),
+      :password => Devise.friendly_token[0,20],
+      community_id: @current_community.id
+    }
+    @person = Person.create!(person_hash)
+    # We trust that Facebook has already confirmed these and save the user few clicks
+    Email.create!(:address => session["devise.spark_data"]["email"], :send_notifications => true, :person => @person, :confirmed_at => Time.now, community_id: @current_community.id)
+
+    @person.set_default_preferences
+
+    #@person.store_picture_from_facebook
+
+    sign_in(resource_name, @person)
+    flash[:notice] = t("layouts.notifications.login_successful", :person_name => view_context.link_to(@person.given_name_or_username, person_path(@person))).html_safe
+
+    CommunityMembership.create(person: @person, community: @current_community, status: "pending_consent")
+
+    session[:fb_join] = "pending_analytics"
+    redirect_to pending_consent_path
+  end
+
   def create_facebook_based
     username = UserService::API::Users.username_from_fb_data(
       username: session["devise.facebook_data"]["username"],
