@@ -12,21 +12,76 @@ require 'devise/strategies/database_authenticatable'
 module Devise
   module Strategies
     class DatabaseAuthenticatable
+      
+      SPARK_AUTH_SERVER = 'http://sparkstaging.midburn.org/api/userlogin'
+      SPARK_AUTH_TOKEN  = 'YWxseW91bmVlZGlzbG92ZWFsbHlvdW5lZWRpc2xvdmVsb3ZlbG92ZWlzYWxseW91'
+      # FIXME: get token from ENV
+
+      def spark_auth auth_server, username, password
+        begin
+          auth_reply = JSON.parse(RestClient.post auth_server, { username: username, 
+                                                                 password: password,
+                                                                 token: SPARK_AUTH_TOKEN
+                                                                })
+          if auth_reply["status"] == "true"
+            spark_data = {  username:     auth_reply["uid"],
+                            given_name:   auth_reply["firstname"],
+                            family_name:  auth_reply["lastname"],
+                            id:           auth_reply["uid"],
+                            email:        auth_reply["username"],
+#                            token:        auth_reply["token"]
+            }
+          else
+            nil
+          end
+        rescue Exception => e
+          nil
+        end
+      end
+
       def authenticate!
         hashed = false
-        person = DatabaseAuthenticatableHelpers.resolve_person(
-          authentication_hash[:login], password, env[:community_id])
+        
+        spark_user = spark_auth SPARK_AUTH_SERVER, authentication_hash[:login], password
+        unless spark_user
+          fail(:invalid_spark_user)
+          return
+        end
+#       person = DatabaseAuthenticatableHelpers.resolve_person(
+#          authentication_hash[:login], password, env[:community_id])
 
-        if person && validate(person) { person.valid_password?(password) }
-          hashed = true
-          remember_me(person)
-          person.after_database_authentication
-          success!(person)
+        person = Person.find_by email: spark_user[:email]
+
+        if person
+          # FIXME: update person's details from spark
+        else
+          spark_user[:locale] = I18n.locale
+          spark_user[:password] = Devise.friendly_token[0,20]
+          spark_user[:community_id] = 1
+
+          ActiveRecord::Base.transaction do
+            person = Person.create!(spark_user)
+            # We trust that Facebook has already confirmed these and save the user few clicks
+            Email.create!(:address => spark_user[:email], :send_notifications => true, :person => person, 
+                          :confirmed_at => Time.now, community_id: 1)
+
+            person.set_default_preferences
+            default_community = Community.find_by! id: 1 
+            CommunityMembership.create(person: person, community: default_community, status: "pending_consent")
+          end
         end
 
-        mapping.to.new.password = password if !hashed && Devise.paranoid
+
+        #if person && validate(person) { person.valid_password?(password) }
+        hashed = true
+        remember_me(person)
+        person.after_database_authentication
+        success!(person)
+        #end
+
+        #mapping.to.new.password = password if !hashed && Devise.paranoid
         # rubocop:disable Style/SignalException
-        fail(:not_found_in_database) unless person
+        #fail(:not_found_in_database) unless person
         # rubocop:enable Style/SignalException
       end
     end
